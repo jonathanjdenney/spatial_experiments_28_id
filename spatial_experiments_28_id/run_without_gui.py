@@ -1,5 +1,8 @@
 import json as js
 import time
+import subprocess
+import matplotlib.pyplot as plt
+from PIL import Image
 from .movement_builder import (
     makeVerticalLine,
     makeGrid,
@@ -13,7 +16,7 @@ class InputFileRunner():
     SpatialExperimentGUI, outside of that GUI.
     """
 
-    def __init__(self, SE28IdConfig):
+    def __init__(self, SE28IdConfig, showImOnRun=False):
         """
         Initalize the class by loading an input file.
         """
@@ -22,6 +25,8 @@ class InputFileRunner():
         self.currentScan = 0
         self.totalScans = len(self.SE28IdConfig['scan_dict'])
         self.currentSampleIndex = 0
+        self.showImOnRun = showImOnRun
+        self.imgIsOpen = False
 
     def __repr__(self):
         rep = str(self.SE28IdConfig)
@@ -98,7 +103,24 @@ class InputFileRunner():
         """
         Do one xrun.
         """
+        if self.imgIsOpen:
+            subprocess.call("killall -KILL myStupidProcess", shell=True)
+            self.imgIsOpen = False
         xrun(self.currentSampleIndex, spGenerator, user_config=self.SE28IdConfig['my_config'])
+        if self.showImOnRun:
+            xs = [i[0] for i in self.allPositions]
+            ys = [i[1] for i in self.allPositions]
+            plt.scatter(xs, ys, label='all positions')
+            plt.scatter([self.xr], [self.yr], label='current position')
+            plt.title('current position')
+            plt.xlabel('x (mm)')
+            plt.ylabel('y (mm)')
+            plt.savefig('current_position.png')
+            plt.close()
+            self.img = Image.open('current_position.png')
+            self.img.show()
+            self.img.close()
+            self.imgIsOpen = True
         print('exposure finished.\n')
 
     def setPowerOutput(self, x):
@@ -133,12 +155,14 @@ class InputFileRunner():
                 self.moveSeg = moveSeg
                 self.currentMoveSeg = self.SE28IdConfig['sample_dict'][sample]['move_segments'][moveSeg]
                 if self.currentMoveSeg['segment_type'] == 'vertical':
-                    allPositions = makeVerticalLine([i for i in self.currentMoveSeg['segment_values']])
+                    self.allPositions = makeVerticalLine([i for i in self.currentMoveSeg['segment_values']])
                 elif self.currentMoveSeg['segment_type'] == 'horizontal':
-                    allPositions = makeHorizontalLine([i for i in self.currentMoveSeg['segment_values']])
+                    self.allPositions = makeHorizontalLine([i for i in self.currentMoveSeg['segment_values']])
                 elif self.currentMoveSeg['segment_type'] == 'grid':
-                    allPositions = makeGrid([i for i in self.currentMoveSeg['segment_values']])
-                for pos in allPositions:
+                    self.allPositions = makeGrid([i for i in self.currentMoveSeg['segment_values']])
+                elif self.currentMoveSeg['segment_type'] == 'list':
+                    self.allPositions = self.currentMoveSeg['segment_values']
+                for pos in self.allPositions:
                     gen = self.scanPlanGenerator(pos[0], pos[1])
                     self.runScan(gen)
 
@@ -163,6 +187,8 @@ class InputFileRunner():
                         allPositions = makeHorizontalLine([i for i in self.currentMoveSeg['segment_values']])
                     elif self.currentMoveSeg['segment_type'] == 'grid':
                         allPositions = makeGrid([i for i in self.currentMoveSeg['segment_values']])
+                    elif self.currentMoveSeg['segment_type'] == 'list':
+                        allPositions = self.currentMoveSeg['segment_values']
                     for pos in allPositions:
                         gen = self.scanPlanGenerator(pos[0], pos[1])
                         self.runScan(gen)

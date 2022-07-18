@@ -66,7 +66,7 @@ class SpatialExperimentGUI(QMainWindow):
         self.topLayout.addWidget(self.scans_completedBtn)
         self.startBtn = QPushButton("Start", self)
         self.startBtn.clicked.connect(self.unkillMe)
-        self.startBtn.clicked.connect(self.run_scans)
+        # self.startBtn.clicked.connect(self.run_scans)
         self.startBtn.clicked.connect(self.update_plot)
         self.topLayout.addWidget(self.startBtn)
         self.killBtn = QPushButton("Stop", self)
@@ -100,11 +100,11 @@ class SpatialExperimentGUI(QMainWindow):
                                                   symbolBrush=('r'))
         self.currentPositions = [[(1, 1)]]
         try:
-            self.currentScanCounter = max([int(i) for i in self.SE28IdConfig['scans_completed'].keys()])
+            self.currentScan = max([int(i) for i in self.SE28IdConfig['scans_completed'].keys()])
         except ValueError:
-            self.currentScanCounter = 0
+            self.currentScan = 0
         try:
-            self.innerCount = self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)][1]
+            self.innerCount = self.SE28IdConfig['scans_completed'][str(self.currentScan)][1]
         except KeyError:
             self.innerCount = 0
         self.xr = 0
@@ -112,7 +112,7 @@ class SpatialExperimentGUI(QMainWindow):
         self.move_sleep = 0
 # the following functions are not finished and will not run: start
 
-    def _get_md(self, x: float, y: float) -> dict:
+    def _getMd(self, x: float, y: float) -> dict:
         """
         Adds metadata to each exposure.
         """
@@ -120,30 +120,31 @@ class SpatialExperimentGUI(QMainWindow):
             **self.SE28IdConfig['extra_md_experiment'],
             **self.extra_md_scan,
             **self.extra_md_sample,
+            **self.SE28IdConfig['extra_md_experiment'],
             **{
                 'Grid_X': x,
                 'Grid_Y': y,
                 'frame_acq_time': glbl['frame_acq_time'],
-                'exposure_time': self.expos_time,
-                'move_segment': self.SE28IdConfig['scan_dict'][str(self.currentScanCounter)]['segment'],
-                'Is_test': self.isTest
+                'exposure_time': self.exposTime,
+                'move_segment': self.moveSegment,
+                'sample': self.currentSample,
             }
         }
         return md
 
-    def _collect_image_at(self, x: float, y: float):
+    def _collectImageAt(self, x: float, y: float):
         """
         Collect one exposure.
         """
-        md = self._get_md(self.xr, self.yr)
         yield from bps.mv(Grid_X, x, Grid_Y, y)
-        yield from bps.sleep(self.move_sleep)
+        yield from bps.sleep(self.moveSleep)
         self.xr = (yield from bps.rd(Grid_X))
         self.yr = (yield from bps.rd(Grid_Y))
+        md = self._getMd(self.xr, self.yr)
         yield from bp.list_grid_scan([pe1c], Grid_Y, [y], Grid_X, [x], md=md)
         return
 
-    def scanplan_generator(self, expos_time, h, v, extra_md_scan={}):
+    def scanPlanGenerator(self, x, y):
         """
         Generate one exposure.
         expos_time: A float of the time in seconds an exposure will take.
@@ -153,82 +154,65 @@ class SpatialExperimentGUI(QMainWindow):
         extra_md_scan: A dictionary of additional metadata for this scan.
             Defaults to an empty dictionary.
         """
-        self.extra_md_scan = extra_md_scan
-        self.expos_time = expos_time
 
-        yield from _configure_area_det(expos_time)
-        yield from self._collect_image_at(h, v)
-        print("exposure at X " + str(h), " Y " + str(v) + " successful")
-        self.extra_md_scan = {}
+        yield from _configure_area_det(self.exposTime)
+        yield from self._collectImageAt(x, y)
         return
 
-    def run_scan(self, sample_index, sp_exp_generator):
+    def runScan(self, spGenerator):
         """
         Do one xrun.
         """
-        xrun(sample_index, sp_exp_generator, user_config=self.SE28IdConfig['my_config'])
-        print('scan finished.\n')
+        xrun(self.currentSampleIndex, spGenerator, user_config=self.SE28IdConfig['my_config'])
+        print('exposure finished.\n')
 
-    def set_power_output(self, x):
+    def setPowerOutput(self, x):
         """ give percentage output (0-100) """
         caput('XF:28ID1-ES{LS336:1-Out:3}Out:Man-SP', x)
 
-    def dark_collection(self):
+    def darkCollection(self):
         """
         Generate one dark.
         """
         yield from take_dark()
         return
 
-    def run_dark(self):
+    def runDark(self):
         """
         Collect one dark.
         """
-        dark_plan = self.dark_collection()
-        self.run_scan(0, dark_plan)
+        darkPlan = self.darkCollection()
+        self.runScan(darkPlan)
 
-    def time_scan_outer(self):
+    def singleScan(self):
         """
-        Outer loop of a time scan.
+        Single scan loop.
         """
-        if self.kill:
-            self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)] =\
-                {'incomplete': 'all', 'time_ran': time.time() - self.t0}
-            return None
-        self.generators = self.makeGenerators()
-        self.innerCount = 0
-
-        if time.time() - self.t0 < self.currentScan['hold_time']:
-            self.time_scan_inner()
-        else:
-            self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)] =\
-                'complete'
-            QtCore.QTimer.singleShot(1, self.run_scans)
-            self.currentScanCounter += 1
-
-    def time_scan_inner(self):
-        """
-        Inner loop of a time scan.
-        """
-        if self.killAll:
-            self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)] =\
-                {'incomplete': self.innerCount,
-                    'time_ran': time.time() - self.t0}
-            return None
-        if self.innerCount <= len(self.generators):
-            self.run_scan(self.generators[self.innerCount][0], self.generators[self.innerCount][1])
-            QtCore.QTimer.singleShot(1, self.time_scan_inner)
-            self.innerCount += 1
-        else:
-            print('Loop completed in ' + str(time.time() - self.t0) + ' seconds')
-            QtCore.QTimer.singleShot(self.currentScan['hold_between_time'] * 1000, self.time_scan_outer)
+        for sample in self.activeScan['samples'].keys():
+            self.currentSample = sample
+            self.extra_md_sample = self.SE28IdConfig['sample_dict'][sample]['extra_md_sample']
+            self.currentSampleIndex = self.SE28IdConfig['sample_dict'][sample]['sample_index']
+            for moveSeg in self.activeScan['samples'][sample]['move_segments'].keys():
+                self.exposTime = self.activeScan['samples'][sample]['move_segments'][moveSeg][1]
+                self.moveSleep = self.activeScan['samples'][sample]['move_segments'][moveSeg][0]
+                self.moveSeg = moveSeg
+                self.currentMoveSeg = self.SE28IdConfig['sample_dict'][sample]['move_segments'][moveSeg]
+                if self.currentMoveSeg['segment_type'] == 'vertical':
+                    allPositions = makeVerticalLine([i for i in self.currentMoveSeg['segment_values']])
+                elif self.currentMoveSeg['segment_type'] == 'horizontal':
+                    allPositions = makeHorizontalLine([i for i in self.currentMoveSeg['segment_values']])
+                elif self.currentMoveSeg['segment_type'] == 'grid':
+                    allPositions = makeGrid([i for i in self.currentMoveSeg['segment_values']])
+                for pos in allPositions:
+                    gen = self.scanPlanGenerator(pos[0], pos[1])
+                    self.runScan(gen)
 
     def single_scan(self, sp_exp_generators):
         """
         Single scan loop.
         """
         if self.killAll:
-            self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)] =\
+            self.SE28IdConfig['scans_completed'][str(self.currentScan)] =\
                 {'incomplete': self.innerCount,
                     'time_ran': time.time() - self.t0}
             return None
@@ -239,14 +223,85 @@ class SpatialExperimentGUI(QMainWindow):
         else:
             print('Loop completed in ' + str(time.time() - self.t0) + ' seconds')
             QtCore.QTimer.singleShot(1, self.run_scans)
-            self.currentScanCounter += 1
+            self.currentScan += 1
+
+    def time_scan_outer(self):
+        """
+        Outer loop of a time scan.
+        """
+        if self.kill:
+            self.SE28IdConfig['scans_completed'][str(self.currentScan)] =\
+                {'incomplete': 'all', 'time_ran': time.time() - self.t0}
+            return None
+        self.generators = self.makeGenerators()
+        self.innerCount = 0
+
+        if time.time() - self.t0 < self.activeScan['hold_time']:
+            self.time_scan_inner()
+        else:
+            self.SE28IdConfig['scans_completed'][str(self.currentScan)] =\
+                'complete'
+            QtCore.QTimer.singleShot(1, self.run_scans)
+            self.currentScan += 1
+
+    def time_scan_inner(self):
+        """
+        Inner loop of a time scan.
+        """
+        if self.killAll:
+            self.SE28IdConfig['scans_completed'][str(self.currentScan)] =\
+                {'incomplete': self.innerCount,
+                    'time_ran': time.time() - self.t0}
+            return None
+        if self.innerCount <= len(self.generators):
+            self.run_scan(self.generators[self.innerCount][0], self.generators[self.innerCount][1])
+            QtCore.QTimer.singleShot(1, self.time_scan_inner)
+            self.innerCount += 1
+        else:
+            print('Loop completed in ' + str(time.time() - self.t0) + ' seconds')
+            QtCore.QTimer.singleShot(self.activeScan['hold_between_time'] * 1000, self.time_scan_outer)
+
+    def runScans(self):
+        """
+        run through all the scans in scan_dict.
+        """
+        if self.kill:
+            return None
+        try:
+            self.activeScan = self.SE28IdConfig['scan_dict'][str(self.currentScan)]
+            self.SE28IdConfig['scans_completed'][str(self.currentScan)] = ['started', 'incomplete']
+        except KeyError:
+            self.kill = True
+            print('End of scans')
+            return None
+        if self.activeScan['scan_type'] == 'sleep':
+            QtCore.QTimer.singleShot(self.activeScan['sleep_time'] * 1000, self.run_scans)
+            self.SE28IdConfig['scans_completed'][str(self.currentScan)][1] = 'complete'
+            self.currentScan += 1
+        elif self.activeScan['scan_type'] == 'take_dark':
+            self.run_dark()
+            QtCore.QTimer.singleShot(1, self.run_scans)
+            self.SE28IdConfig['scans_completed'][str(self.currentScan)][1] = 'complete'
+            self.currentScan += 1
+        elif self.activeScan['scan_type'] == 'set_power_output':
+            self.set_power_output(self.currentScan['power'])
+            QtCore.QTimer.singleShot(500, self.run_scans)
+            self.SE28IdConfig['scans_completed'][str(self.currentScan)][1] = 'complete'
+            self.currentScan += 1
+        elif self.activeScan['scan_type'] == 'time_scan':
+            self.t0 = time.time()
+            self.time_scan()
+        elif self.activeScan['scan_type'] == 'single_scan':
+            self.generators = self.makeGenerators()
+            self.innerCount = 0
+            self.single_scan()
 
     def makeGenerators(self):
         """
         Make the generators for the currenct scan.
         """
         generators = []
-        currentScanSamples = self.currentScan['samples']
+        currentScanSamples = self.activeScan['samples']
         self.currentPositions = []
         for key in currentScanSamples.keys():
             posList = self.getMovement(key, currentScanSamples[key]['move_segment'])
@@ -1276,41 +1331,6 @@ class SpatialExperimentGUI(QMainWindow):
         self.kill = False
         self.killAll = False
         print('Starting')
-
-    def run_scans(self):
-        """
-        run through all the scans in scan_dict.
-        """
-        if self.kill:
-            self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)] = {'incomplete': 'all'}
-            return None
-        try:
-            self.currentScan = self.SE28IdConfig['scan_dict'][str(self.currentScanCounter)]
-        except KeyError:
-            self.kill = True
-            print('End of scans')
-            return None
-        if self.currentScan['scan_type'] == 'sleep':
-            QtCore.QTimer.singleShot(self.currentScan['sleep_time'] * 1000, self.run_scans)
-            self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)] = 'complete'
-            self.currentScanCounter += 1
-        elif self.currentScan['scan_type'] == 'take_dark':
-            self.run_dark()
-            QtCore.QTimer.singleShot(1, self.run_scans)
-            self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)] = 'complete'
-            self.currentScanCounter += 1
-        elif self.currentScan['scan_type'] == 'set_power_output':
-            self.set_power_output(self.currentScanCounter['power'])
-            QtCore.QTimer.singleShot(500, self.run_scans)
-            self.SE28IdConfig['scans_completed'][str(self.currentScanCounter)] = 'complete'
-            self.currentScanCounter += 1
-        elif self.currentScan['scan_type'] == 'time_scan':
-            self.t0 = time.time()
-            self.time_scan()
-        elif self.currentScan['scan_type'] == 'single_scan':
-            self.generators = self.makeGenerators()
-            self.innerCount = 0
-            self.single_scan()
 
     def update_plot_single(self):
         """
