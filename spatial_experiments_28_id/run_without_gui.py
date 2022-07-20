@@ -1,8 +1,6 @@
 import json as js
 import time
-import subprocess
 import matplotlib.pyplot as plt
-from PIL import Image
 from .movement_builder import (
     makeVerticalLine,
     makeGrid,
@@ -26,7 +24,14 @@ class InputFileRunner():
         self.totalScans = len(self.SE28IdConfig['scan_dict'])
         self.currentSampleIndex = 0
         self.showImOnRun = showImOnRun
-        self.imgIsOpen = False
+        if showImOnRun:
+            plt.ion()
+            self.fig, self.ax = plt.subplots()
+            self.allP = self.ax.scatter([], [], label='All positions')
+            self.currP = self.ax.scatter([], [], label='Current position')
+            plt.title('current position')
+            plt.xlabel('x (mm)')
+            plt.ylabel('y (mm)')
 
     def __repr__(self):
         rep = str(self.SE28IdConfig)
@@ -103,24 +108,19 @@ class InputFileRunner():
         """
         Do one xrun.
         """
-        if self.imgIsOpen:
-            subprocess.call("killall -KILL myStupidProcess", shell=True)
-            self.imgIsOpen = False
         xrun(self.currentSampleIndex, spGenerator, user_config=self.SE28IdConfig['my_config'])
         if self.showImOnRun:
             xs = [i[0] for i in self.allPositions]
             ys = [i[1] for i in self.allPositions]
-            plt.scatter(xs, ys, label='all positions')
-            plt.scatter([self.xr], [self.yr], label='current position')
-            plt.title('current position')
-            plt.xlabel('x (mm)')
-            plt.ylabel('y (mm)')
-            plt.savefig('current_position.png')
-            plt.close()
-            self.img = Image.open('current_position.png')
-            self.img.show()
-            self.img.close()
-            self.imgIsOpen = True
+            self.allP.set_xdata(xs, ys)
+            self.currP.set_xdata([self.xr], [self.yr])
+            self.ax.set_ylim(min(ys) - 10, max(ys) + 10)
+            self.ax.set_xlim(min(xs) - 10, max(xs) + 10)
+            self.allP.figure.canvas.draw()
+            self.allP.figure.canvas.flush_events()
+            self.currP.figure.canvas.draw()
+            self.currP.figure.canvas.flush_events()
+
         print('exposure finished.\n')
 
     def setPowerOutput(self, x):
