@@ -65,7 +65,6 @@ class InputFileRunner():
             **self.SE28IdConfig['extra_md_experiment'],
             **self.extra_md_scan,
             **self.extra_md_sample,
-            **self.SE28IdConfig['extra_md_experiment'],
             **{
                 'Grid_X': x,
                 'Grid_Y': y,
